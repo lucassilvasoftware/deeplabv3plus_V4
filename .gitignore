@@ -1,0 +1,39 @@
+# Ambiente virtual
+venv/
+.venv/
+
+# Dados grandes
+data/
+
+# Modelos salvos
+*.pth
+*.pt
+checkpoints/
+models/
+data/images
+
+# Arquivos Python temporários
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+
+# Logs
+*.log
+logs/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Configs locais
+.env
+
+DeepLabV3/
+DeepLabV3+/
+
+src/Backups/*
+
+*.zip
+
+outputs/ImagensSegmentadas/*
