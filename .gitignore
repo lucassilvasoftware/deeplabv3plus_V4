@@ -1,39 +1,74 @@
-# Ambiente virtual
+# ---- Ambiente virtual ----
 venv/
 .venv/
+.env
+.env.*
+*.venv
 
-# Dados grandes
+# ---- Documentação (não versionar) ----
+docs/
+
+# ---- Dados e datasets (não versionar) ----
 data/
-
-# Modelos salvos
+processed_dataset/
 *.pth
 *.pt
 checkpoints/
 models/
-data/images
 
-# Arquivos Python temporários
+# ---- Saídas geradas (treino, eval, inference) ----
+outputs/
+
+# ---- Python ----
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 *.pyo
 *.pyd
+*.egg
 *.egg-info/
+.eggs/
+dist/
+build/
+*.so
 
-# Logs
+# ---- Jupyter ----
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# ---- Logs e temporários ----
 *.log
 logs/
+*.tmp
+*.temp
+.cache/
 
-# Jupyter
-.ipynb_checkpoints/
+# ---- SLURM (jobs no cluster) ----
+slurm_*.out
+slurm_*.err
 
-# Configs locais
-.env
+# ---- IDE / editor ----
+.cursor/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
 
+# ---- Sistema operacional ----
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Texto (TCC / LaTeX - não versionar) ----
+text/
+
+# ---- Arquivos grandes / legado ----
+*.zip
+*.tar
+*.tar.gz
+*.rar
+data/images
 DeepLabV3/
 DeepLabV3+/
-
-src/Backups/*
-
-*.zip
-
-outputs/ImagensSegmentadas/*
+src/Backups/

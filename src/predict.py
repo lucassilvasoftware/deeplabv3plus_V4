@@ -7,14 +7,11 @@ from config import Config
 from train import get_model   # usa o mesmo modelo do treino
 from utils import save_colored_mask
 
-# Diretórios globais
-ROOT = Path(__file__).resolve().parent.parent
-MODELS_DIR = ROOT / "models"
-OUTPUTS_DIR = ROOT / "outputs"
-MODELS_DIR.mkdir(exist_ok=True)
-OUTPUTS_DIR.mkdir(exist_ok=True)
-
 config = Config()
+config.ensure_dirs()
+MODELS_DIR = config.MODELS_DIR
+OUTPUTS_INFERENCE = config.OUTPUTS_INFERENCE
+OUTPUTS_TRAINING = config.OUTPUTS_TRAINING
 
 
 # ====== Carregar modelos treinados (ensemble) ======
@@ -25,7 +22,7 @@ def load_models():
         if not path.exists():
             print(f"Modelo do fold {fold} não encontrado, ignorando.")
             continue
-        model = get_model(config.NUM_CLASSES).to(config.DEVICE)
+        model = get_model(config).to(config.DEVICE)
         model.load_state_dict(torch.load(path, map_location=config.DEVICE))
         model.eval()
         models.append(model)
@@ -34,7 +31,7 @@ def load_models():
 
 # ====== Predição com ensemble ======
 def predict_ensemble(models, image_tensor):
-    with torch.no_grad(), torch.cuda.amp.autocast():
+    with torch.no_grad(), torch.amp.autocast(device_type="cuda"):
         preds = [torch.softmax(m(image_tensor)["out"], dim=1) for m in models]
         avg_pred = torch.mean(torch.stack(preds), dim=0)
         return torch.argmax(avg_pred, dim=1)
@@ -71,7 +68,7 @@ def predict_full_image(models, image_path, patch_size=256):
 
 # ====== Relatório de treinamento ======
 def training_report():
-    log_file = OUTPUTS_DIR / "training_log.txt"
+    log_file = OUTPUTS_TRAINING / "training_log.txt"
     if not log_file.exists():
         print("\nNenhum log encontrado! Execute o treino primeiro.")
         return
@@ -101,16 +98,16 @@ if __name__ == "__main__":
         print("Nenhum modelo carregado! Treine primeiro.")
         exit()
 
-    test_image = ROOT / "data" / "images" / "raster05.tif"
+    test_image = config.ROOT / "data" / "images" / "raster05.tif"
     print(f"Segmentando {test_image} ...")
     mask = predict_full_image(models, test_image, patch_size=config.IMAGE_SIZE)
 
-    # Salvar resultados
-    save_colored_mask(mask, config.CLASS_COLORS, str(OUTPUTS_DIR / "segmented.png"))
-    np.save(OUTPUTS_DIR / "segmented_raw.npy", mask)
+    # Salvar em outputs/inference/
+    save_colored_mask(mask, config.CLASS_COLORS, str(OUTPUTS_INFERENCE / "segmented.png"))
+    np.save(OUTPUTS_INFERENCE / "segmented_raw.npy", mask)
 
     print("Segmentação salva em:")
-    print(f"  - {OUTPUTS_DIR/'segmented.png'} (colorida)")
-    print(f"  - {OUTPUTS_DIR/'segmented_raw.npy'} (matriz classes)")
+    print(f"  - {OUTPUTS_INFERENCE/'segmented.png'} (colorida)")
+    print(f"  - {OUTPUTS_INFERENCE/'segmented_raw.npy'} (matriz classes)")
 
     training_report()

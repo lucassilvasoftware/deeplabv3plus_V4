@@ -1,3 +1,7 @@
+"""
+Dataset legado: patches a partir de listas de imagens/labels (folds), com conversão RGB→índice.
+O fluxo principal de treino usa processed_loader.ProcessedDataset; este módulo permanece para referência/compatibilidade.
+"""
 import cv2
 import numpy as np
 import albumentations as A
