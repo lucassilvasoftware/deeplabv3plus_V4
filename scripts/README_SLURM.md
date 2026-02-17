@@ -7,6 +7,7 @@
   ```bash
   sacctmgr list user $USER -s format=partition%20,account,MaxJobs,MaxSubmit,MaxWall
   ```
+- **Referência rápida de comandos:** [COMANDOS_SLURM.md](COMANDOS_SLURM.md) — ver jobs, REASON (ex.: QOSMinGRES na lncc-h100_shared), sinfo, scancel, saída do job, módulos.
 
 ---
 
@@ -48,6 +49,20 @@ Se o módulo Anaconda tiver outro nome no cluster, use `module avail anaconda` (
 ## Como rodar o treino
 
 Projeto: FEI (Ciência da Computação) em parceria com professor LNCC — uso das filas SINAPAD (lncc-h100_shared, etc.). **Não** é projeto PETROBRAS/Parceiros; não é necessário `--account`.
+
+**Depois de criar o env (seção acima), para rodar o treino:**
+
+1. Entre na pasta do projeto e submeta o job:
+   ```bash
+   cd /scratch/psivgmp/lucas.silva8/deeplabv3plus_V4
+   sbatch scripts/slurm_train_sdumont2nd.slurm
+   ```
+2. O SLURM responde com um **Job ID** (ex.: `Submitted batch job 12345`). O job entra na fila e, quando houver GPU livre, começa a rodar sozinho.
+3. Para acompanhar: `squeue -u $USER` (lista seus jobs). Saída do treino: `slurm_<JOBID>.out` e `slurm_<JOBID>.err` nesta pasta; logs com data/hora: `outputs/training/training_*.log`. Pesos salvos: `models/deeplabv3plus_best_weights.pth` (ou `deeplabv3plus_test_weights.pth` se estiver em TEST_MODE).
+
+Não precisa ficar logado: depois do `sbatch` pode desconectar; o job continua rodando no cluster.
+
+---
 
 ### 1. No cluster, entre na pasta do projeto
 ```bash
