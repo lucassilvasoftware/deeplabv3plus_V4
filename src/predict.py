@@ -67,18 +67,33 @@ def predict_full_image(models, image_path, patch_size=256):
 
 
 # ====== Relatório de treinamento ======
+def _latest_training_log():
+    """Retorna o path do log de treino mais recente (training_YYYY-MM-DD_HH-MM-SS.log)."""
+    logs = list(OUTPUTS_TRAINING.glob("training_*.log"))
+    if not logs:
+        return None
+    return max(logs, key=lambda p: p.stat().st_mtime)
+
+
 def training_report():
-    log_file = OUTPUTS_TRAINING / "training_log.txt"
-    if not log_file.exists():
+    log_file = _latest_training_log()
+    if log_file is None:
         print("\nNenhum log encontrado! Execute o treino primeiro.")
         return
 
     fold_scores = []
-    with open(log_file) as f:
+    best_val_miou = None
+    with open(log_file, encoding="utf-8") as f:
         for line in f:
             if "Melhor mIoU fold" in line:
                 score = float(line.strip().split(":")[-1])
                 fold_scores.append(score)
+            if "Melhor mIoU (val):" in line:
+                part = line.split("Melhor mIoU (val):")[-1].strip().replace("%", "")
+                try:
+                    best_val_miou = float(part)
+                except ValueError:
+                    pass
 
     if fold_scores:
         mean, std = np.mean(fold_scores), np.std(fold_scores)
@@ -87,6 +102,9 @@ def training_report():
             print(f"  Fold {i}: {score:.2f}%")
         print(f"\n  Média: {mean:.2f}%")
         print(f"  Desvio padrão: {std:.2f}%")
+    elif best_val_miou is not None:
+        print(f"\nÚltimo treino (log: {log_file.name})")
+        print(f"  Melhor mIoU (val): {best_val_miou:.2f}%")
     else:
         print("Nenhuma métrica encontrada nos logs.")
 

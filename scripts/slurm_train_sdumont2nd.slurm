@@ -7,17 +7,15 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --gpus=1
 #SBATCH --time=24:00:00
-# SBATCH --account=SIGLA_DO_PROJETO
-# ↑ Descomente e preencha se for projeto PETROBRAS/Parceiros (obrigatório).
-#   Liste com: sacctmgr list user $USER -s format=partition%20,account,MaxJobs,MaxWall
+# SBATCH --account=SIGLA   # só se for projeto PETROBRAS/Parceiros (não é o caso de projeto FEI/LNCC)
+# --time e --gpus são obrigatórios. Doc: wiki 06, 07, 08. Ver README_SLURM.md.
 
-# Raiz do projeto no Lustre (SDumont2nd: $HOME e $SCRATCH apontam para Lustre)
-export TCC_BASE_DIR=${SCRATCH:-$HOME}/tcc-v2-DeeplabV3Plus
-cd $TCC_BASE_DIR
+export TCC_BASE_DIR=/scratch/psivgmp/lucas.silva8/deeplabv3plus_V4
+cd /scratch/psivgmp/lucas.silva8/deeplabv3plus_V4 || { echo "Erro: pasta do projeto nao encontrada"; exit 1; }
 
-# Conda: carregar e ativar DENTRO do script (não ativar antes de sbatch)
-# Ajuste o módulo conforme disponível no cluster: module avail anaconda
+# Ambiente Python: crie um env no cluster uma vez (ver README_SLURM.md). Depois use o nome aqui.
 module load anaconda3/2024.02_sequana
-source activate $SCRATCH/conda-tcc
+source activate tcc
 
+# Logs com data/hora em outputs/training/training_YYYY-MM-DD_HH-MM-SS.log
 python src/main.py

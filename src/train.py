@@ -3,9 +3,11 @@ Treino e avaliação: um único fluxo (sem K-fold). Constrói DataLoaders a part
 (processed_dataset); loop de épocas (train/val); cálculo de mIoU, F1 e matriz de confusão;
 early stopping e salvamento do melhor modelo; avaliação final no test set da APA.
 Dashboard HTML em tempo real quando DASHBOARD_PORT está definido.
+Logs via logging (arquivo com data/hora + console).
 Funções principais: get_model, train_model, run_final_evaluation_apa.
 """
 import json
+import logging
 import time
 from datetime import datetime, timedelta
 import torch
@@ -148,16 +150,16 @@ def _set_seed(seed):
         torch.cuda.manual_seed_all(seed)
 
 
-def _log_config(config, log_path):
-    """Registra hiperparâmetros no início do treino."""
-    with open(log_path, "a", encoding="utf-8") as f:
-        f.write("--- Config ---\n")
-        f.write(f"SEED={config.SEED} BATCH_SIZE={config.BATCH_SIZE} EPOCHS={config.EPOCHS}\n")
-        f.write(f"LEARNING_RATE={config.LEARNING_RATE} WEIGHT_DECAY={config.WEIGHT_DECAY}\n")
-        f.write(f"GRADIENT_CLIP_NORM={config.GRADIENT_CLIP_NORM}\n")
-        f.write(f"LOSS_ALPHA={config.LOSS_ALPHA} LOSS_GAMMA={config.LOSS_GAMMA} CE_WEIGHT={config.CE_WEIGHT}\n")
-        f.write(f"EARLY_STOP_PATIENCE={config.EARLY_STOP_PATIENCE}\n")
-        f.write("--------------\n")
+def _log_config(config):
+    """Registra hiperparâmetros no início do treino (via logging)."""
+    log = logging.getLogger()
+    log.info("--- Config ---")
+    log.info("SEED=%s BATCH_SIZE=%s EPOCHS=%s", config.SEED, config.BATCH_SIZE, config.EPOCHS)
+    log.info("LEARNING_RATE=%s WEIGHT_DECAY=%s", config.LEARNING_RATE, config.WEIGHT_DECAY)
+    log.info("GRADIENT_CLIP_NORM=%s", config.GRADIENT_CLIP_NORM)
+    log.info("LOSS_ALPHA=%s LOSS_GAMMA=%s CE_WEIGHT=%s", config.LOSS_ALPHA, config.LOSS_GAMMA, config.CE_WEIGHT)
+    log.info("EARLY_STOP_PATIENCE=%s", config.EARLY_STOP_PATIENCE)
+    log.info("--------------")
 
 
 def _format_duration(seconds):
@@ -405,11 +407,9 @@ def train_model(config):
     MODELS_DIR = config.MODELS_DIR
     OUTPUTS_TRAINING = config.OUTPUTS_TRAINING
     OUTPUTS_EVAL = config.OUTPUTS_EVAL
-    log_path = OUTPUTS_TRAINING / "training_log.txt"
-    with open(log_path, "w", encoding="utf-8") as f:
-        f.write("Log de treinamento (splits fixos, sem K-fold)\n")
     _set_seed(config.SEED)
-    _log_config(config, log_path)
+    logging.info("Log de treinamento (splits fixos, sem K-fold)")
+    _log_config(config)
 
     train_loader, val_loader = _build_dataloaders(config)
     n_batches = len(train_loader)
@@ -419,15 +419,17 @@ def train_model(config):
     # Nome do arquivo de pesos (teste vs real)
     _weights_name = "deeplabv3plus_test_weights.pth" if getattr(config, "TEST_MODE", False) else "deeplabv3plus_best_weights.pth"
     # Header do treino
-    print("\n" + "=" * 60)
-    print("  TREINAMENTO — DeepLabV3+")
-    print("=" * 60)
-    print(f"  Modo: {'TESTE (rápido)' if getattr(config, 'TEST_MODE', False) else 'REAL'}")
-    print(f"  Pesos: {config.MODELS_DIR / _weights_name}")
-    print(f"  Épocas: {config.EPOCHS}  |  Early stop: {config.EARLY_STOP_PATIENCE}  |  Batch: {config.BATCH_SIZE}")
-    print(f"  LR: {config.LEARNING_RATE}  |  Weight decay: {config.WEIGHT_DECAY}  |  Clip norm: {config.GRADIENT_CLIP_NORM}")
-    print(f"  Batches/época: {steps_per_epoch}" + (f" (limitado de {n_batches})" if max_batches else ""))
-    print("=" * 60 + "\n")
+    logging.info("")
+    logging.info("=" * 60)
+    logging.info("  TREINAMENTO — DeepLabV3+")
+    logging.info("=" * 60)
+    logging.info("  Modo: %s", "TESTE (rápido)" if getattr(config, "TEST_MODE", False) else "REAL")
+    logging.info("  Pesos: %s", config.MODELS_DIR / _weights_name)
+    logging.info("  Épocas: %s  |  Early stop: %s  |  Batch: %s", config.EPOCHS, config.EARLY_STOP_PATIENCE, config.BATCH_SIZE)
+    logging.info("  LR: %s  |  Weight decay: %s  |  Clip norm: %s", config.LEARNING_RATE, config.WEIGHT_DECAY, config.GRADIENT_CLIP_NORM)
+    logging.info("  Batches/época: %s%s", steps_per_epoch, f" (limitado de {n_batches})" if max_batches else "")
+    logging.info("=" * 60)
+    logging.info("")
 
     # Dashboard em tempo real (servidor + HTML); desativar com ENABLE_DASHBOARD=False (ex: Santos Dumont)
     dashboard_port = getattr(config, "DASHBOARD_PORT", None) if getattr(config, "ENABLE_DASHBOARD", False) else None
@@ -440,7 +442,8 @@ def train_model(config):
             daemon=True,
         )
         server_thread.start()
-        print(f"  Dashboard (tempo real): http://localhost:{dashboard_port}/training_dashboard.html\n")
+        logging.info("  Dashboard (tempo real): http://localhost:%s/training_dashboard.html", dashboard_port)
+        logging.info("")
 
     t_start = time.time()
     epoch_times = []  # duração de cada época concluída (train+val)
@@ -601,10 +604,12 @@ def train_model(config):
         avg_ep = np.mean(epoch_times) if epoch_times else None
         avg_val = np.mean(val_times) if val_times else None
         eta_total = (epochs_remaining * (avg_ep + (avg_val or 0))) if (avg_ep is not None and epochs_remaining) else None
-        print("\n" + "-" * 60)
-        print(f"  ÉPOCA {epoch}/{config.EPOCHS}  |  Tempo: {_format_duration(elapsed_so_far)}  |  Épocas rest.: {epochs_remaining}  |  ETA: {_format_duration(eta_total)}")
-        print("-" * 60)
-        print(f"  Train  loss: {train_loss:.4f}")
+        logging.info("")
+        logging.info("-" * 60)
+        logging.info("  ÉPOCA %s/%s  |  Tempo: %s  |  Épocas rest.: %s  |  ETA: %s",
+                    epoch, config.EPOCHS, _format_duration(elapsed_so_far), epochs_remaining, _format_duration(eta_total))
+        logging.info("-" * 60)
+        logging.info("  Train  loss: %.4f", train_loss)
 
         if val_loader is not None:
             t_val_start = time.time()
@@ -651,10 +656,11 @@ def train_model(config):
                             config.CLASS_NAMES, last_ious, last_f1_per_class, miou_history)
                 _write_training_status(OUTPUTS_TRAINING, st)
 
-            print(f"  Val    loss: {val_loss:.4f}")
-            print(f"  mIoU:  {miou*100:.2f}%   |   F1 macro: {f1_macro*100:.2f}%")
-            print()
-            print(format_metrics_table(metrics, config.CLASS_NAMES))
+            logging.info("  Val    loss: %.4f", val_loss)
+            logging.info("  mIoU:  %.2f%%   |   F1 macro: %.2f%%", miou * 100, f1_macro * 100)
+            logging.info("")
+            for line in format_metrics_table(metrics, config.CLASS_NAMES).splitlines():
+                logging.info("%s", line)
 
             if miou > best_val_miou:
                 best_val_miou = miou
@@ -666,23 +672,23 @@ def train_model(config):
                     save_dir=config.OUTPUTS_EVAL,
                     prefix="val_best",
                 )
-                print("\n  >> Novo melhor modelo salvo (mIoU {:.2f}%)".format(miou * 100))
+                logging.info("  >> Novo melhor modelo salvo (mIoU %.2f%%)", miou * 100)
             else:
                 patience_counter += 1
-                print(f"\n  Patience: {patience_counter}/{patience} (melhor mIoU: {best_val_miou*100:.2f}%)")
+                logging.info("  Patience: %s/%s (melhor mIoU: %.2f%%)", patience_counter, patience, best_val_miou * 100)
                 if patience_counter >= patience:
-                    print("\n  Early stopping ativado.")
+                    logging.info("  Early stopping ativado.")
                     break
         else:
             torch.save(model.state_dict(), config.MODELS_DIR / _weights_name)
 
         epoch_times.append(time.time() - t_epoch_start)
 
-        with open(log_path, "a", encoding="utf-8") as f:
-            f.write(f"Época {epoch}: train_loss={train_loss:.4f}")
-            if val_loader is not None:
-                f.write(f" val_loss={val_loss:.4f} miou={miou*100:.4f} f1_macro={f1_macro*100:.4f}")
-            f.write("\n")
+        if val_loader is not None:
+            logging.info("Época %s: train_loss=%.4f val_loss=%.4f miou=%.4f f1_macro=%.4f",
+                         epoch, train_loss, val_loss, miou * 100, f1_macro * 100)
+        else:
+            logging.info("Época %s: train_loss=%.4f", epoch, train_loss)
 
     if dashboard_port:
         st = _state("finished", None, config.EPOCHS, None, None, None,
@@ -693,12 +699,14 @@ def train_model(config):
         _write_training_status(OUTPUTS_TRAINING, st)
 
     total_elapsed = time.time() - t_start
-    print("\n" + "=" * 60)
-    print("  TREINO FINALIZADO")
-    print("=" * 60)
-    print(f"  Melhor mIoU (val): {best_val_miou*100:.2f}%")
-    print(f"  Tempo total: {_format_duration(total_elapsed)}")
-    print("=" * 60 + "\n")
+    logging.info("")
+    logging.info("=" * 60)
+    logging.info("  TREINO FINALIZADO")
+    logging.info("=" * 60)
+    logging.info("  Melhor mIoU (val): %.2f%%", best_val_miou * 100)
+    logging.info("  Tempo total: %s", _format_duration(total_elapsed))
+    logging.info("=" * 60)
+    logging.info("")
     return model
 
 
@@ -714,12 +722,12 @@ def run_final_evaluation_apa(config, model=None, weights_path=None):
             apa_key = key
             break
     if apa_key is None:
-        print("Nenhum dataset com use: test no registry. Pulando avaliação final APA.")
+        logging.info("Nenhum dataset com use: test no registry. Pulando avaliação final APA.")
         return
     dataset_root = config.PROCESSED_DATASET_ROOT / registry[apa_key]["path"]
     test_pairs = build_pair_list(dataset_root, "test")
     if not test_pairs:
-        print("Nenhum par no split test da APA. Pulando avaliação final.")
+        logging.info("Nenhum par no split test da APA. Pulando avaliação final.")
         return
     apa_max = getattr(config, "APA_MAX_SIZE", None)
     test_set = ProcessedDataset(
@@ -738,7 +746,7 @@ def run_final_evaluation_apa(config, model=None, weights_path=None):
         if path.exists():
             model.load_state_dict(torch.load(path, map_location=config.DEVICE))
         else:
-            print(f"Pesos não encontrados em {path}. Avaliação com modelo não treinado.")
+            logging.warning("Pesos não encontrados em %s. Avaliação com modelo não treinado.", path)
     model.eval()
     preds_all, targets_all = [], []
     with torch.no_grad():
@@ -759,11 +767,14 @@ def run_final_evaluation_apa(config, model=None, weights_path=None):
         save_dir=config.OUTPUTS_EVAL,
         prefix="test_apa",
     )
-    print("\n" + "=" * 60)
-    print("  AVALIAÇÃO FINAL — APA (test set)")
-    print("=" * 60)
-    print(f"  mIoU: {metrics['miou']*100:.2f}%   |   F1 macro: {metrics['f1_macro']*100:.2f}%")
-    print()
-    print(format_metrics_table(metrics, config.CLASS_NAMES))
-    print(f"\n  Métricas e matriz de confusão: {config.OUTPUTS_EVAL} (test_apa_*.csv/txt)")
-    print("=" * 60 + "\n")
+    logging.info("")
+    logging.info("=" * 60)
+    logging.info("  AVALIAÇÃO FINAL — APA (test set)")
+    logging.info("=" * 60)
+    logging.info("  mIoU: %.2f%%   |   F1 macro: %.2f%%", metrics["miou"] * 100, metrics["f1_macro"] * 100)
+    logging.info("")
+    for line in format_metrics_table(metrics, config.CLASS_NAMES).splitlines():
+        logging.info("%s", line)
+    logging.info("  Métricas e matriz de confusão: %s (test_apa_*.csv/txt)", config.OUTPUTS_EVAL)
+    logging.info("=" * 60)
+    logging.info("")

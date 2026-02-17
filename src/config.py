@@ -39,9 +39,9 @@ class Config:
     ENCODER_WEIGHTS = "imagenet"  # ou None para treinar do zero
 
     # ----- Dados / DataLoader -----
-    BATCH_SIZE = 4  # reduzir (ex: 2) se OOM em GPU 8GB; aumentar no Santos Dumont
-    NUM_WORKERS = 0
-    APA_MAX_SIZE = (512, 512)  # tamanho alvo das imagens; (1024,1024) exige mais VRAM (ex: batch 2 em 8GB)
+    BATCH_SIZE = 4  # local/GPU pequena; no Santos Dumont é sobrescrito abaixo
+    NUM_WORKERS = 0  # local; no Santos Dumont sobrescrito para 4–8
+    APA_MAX_SIZE = (512, 512)  # (1024,1024) no cluster só se aumentar VRAM; ver override abaixo
     # Proporções ao gerar splits automaticamente (ex. dataset 3): train / val / resto=test
     SPLIT_TRAIN_RATIO = 0.70
     SPLIT_VAL_RATIO = 0.15
@@ -114,9 +114,12 @@ class Config:
         cls.OUTPUTS_INFERENCE.mkdir(parents=True, exist_ok=True)
 
 
-# Em cluster (TCC_BASE_DIR definido): desativa dashboard por padrão
+# Em cluster (TCC_BASE_DIR definido): desativa dashboard e ajusta batches para H100/GH200
 if os.environ.get("TCC_BASE_DIR"):
     Config.ENABLE_DASHBOARD = False
+    Config.BATCH_SIZE = 24          # H100 80GB / GH200: 512x512 cabe bem; reduzir se OOM
+    Config.NUM_WORKERS = 6          # Lustre aproveita I/O paralelo
+    # Config.APA_MAX_SIZE = (1024, 1024)  # opcional: mais resolução; usar BATCH_SIZE 8–12
 
 # Overrides quando TEST_MODE=True (avalia na importação)
 if getattr(Config, "TEST_MODE", False):
