@@ -24,6 +24,7 @@ from config import Config
 from processed_loader import (
     load_registry,
     ensure_splits_for_processed,
+    ensure_splits_for_raw,
     build_pair_list,
     ProcessedDataset,
 )
@@ -87,13 +88,21 @@ def _build_dataloaders(config):
     val_datasets = []
     for key, info in registry.items():
         use = info.get("use")
-        dataset_root = config.PROCESSED_DATASET_ROOT / info["path"]
+        # path no registry é relativo à raiz do projeto (ROOT) para apontar a datasets brutos ou a subpastas
+        dataset_root = config.ROOT / info["path"]
         if not dataset_root.exists():
             continue
-        # Datasets de treino: sempre incluir
+        # Datasets de treino: garantir splits
         if use == "train":
             ensure_splits_for_processed(
                 dataset_root,
+                seed=config.SEED,
+                train_ratio=config.SPLIT_TRAIN_RATIO,
+                val_ratio=config.SPLIT_VAL_RATIO,
+            )
+            ensure_splits_for_raw(
+                dataset_root,
+                info,
                 seed=config.SEED,
                 train_ratio=config.SPLIT_TRAIN_RATIO,
                 val_ratio=config.SPLIT_VAL_RATIO,
@@ -104,8 +113,8 @@ def _build_dataloaders(config):
                 continue
         else:
             continue
-        train_pairs = build_pair_list(dataset_root, "train")
-        val_pairs = build_pair_list(dataset_root, "val")
+        train_pairs = build_pair_list(dataset_root, "train", info=info)
+        val_pairs = build_pair_list(dataset_root, "val", info=info)
         num_classes = config.NUM_CLASSES
         # Tamanho alvo único para todos os datasets (evita batch com imagens de tamanhos diferentes)
         target_size = getattr(config, "APA_MAX_SIZE", (1024, 1024))
@@ -689,6 +698,14 @@ def train_model(config):
                          epoch, train_loss, val_loss, miou * 100, f1_macro * 100)
         else:
             logging.info("Época %s: train_loss=%.4f", epoch, train_loss)
+        # Uma linha por época para grep no cluster (ex.: grep PROGRESS outputs/training/*.log)
+        pct_epoch = 100.0 * epoch / config.EPOCHS
+        _vloss = last_val_loss if last_val_loss is not None else 0.0
+        _miou = (last_miou * 100) if last_miou is not None else 0.0
+        logging.info(
+            "PROGRESS epoch=%d/%d pct=%.1f%% train_loss=%.4f val_loss=%.4f miou=%.2f%% best_miou=%.2f%%",
+            epoch, config.EPOCHS, pct_epoch, train_loss, _vloss, _miou, best_val_miou * 100,
+        )
 
     if dashboard_port:
         st = _state("finished", None, config.EPOCHS, None, None, None,
@@ -724,8 +741,9 @@ def run_final_evaluation_apa(config, model=None, weights_path=None):
     if apa_key is None:
         logging.info("Nenhum dataset com use: test no registry. Pulando avaliação final APA.")
         return
-    dataset_root = config.PROCESSED_DATASET_ROOT / registry[apa_key]["path"]
-    test_pairs = build_pair_list(dataset_root, "test")
+    info = registry[apa_key]
+    dataset_root = config.ROOT / info["path"]
+    test_pairs = build_pair_list(dataset_root, "test", info=info)
     if not test_pairs:
         logging.info("Nenhum par no split test da APA. Pulando avaliação final.")
         return

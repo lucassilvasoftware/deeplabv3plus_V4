@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import Config
-from processed_loader import load_registry, ensure_splits_for_processed, build_pair_list, ProcessedDataset
+from processed_loader import load_registry, ensure_splits_for_processed, ensure_splits_for_raw, build_pair_list, ProcessedDataset
 from torch.utils.data import DataLoader
 
 
@@ -39,14 +39,15 @@ def main():
 
     print("3. Splits e pares por dataset")
     for key, info in registry.items():
-        dataset_root = cfg.PROCESSED_DATASET_ROOT / info["path"]
+        dataset_root = cfg.ROOT / info["path"]
         if not dataset_root.exists():
             print(f"   {key}: pasta não existe -> {dataset_root}")
             continue
         ensure_splits_for_processed(dataset_root, seed=cfg.SEED, train_ratio=cfg.SPLIT_TRAIN_RATIO, val_ratio=cfg.SPLIT_VAL_RATIO)
-        train_pairs = build_pair_list(dataset_root, "train")
-        val_pairs = build_pair_list(dataset_root, "val")
-        test_pairs = build_pair_list(dataset_root, "test")
+        ensure_splits_for_raw(dataset_root, info, seed=cfg.SEED, train_ratio=cfg.SPLIT_TRAIN_RATIO, val_ratio=cfg.SPLIT_VAL_RATIO)
+        train_pairs = build_pair_list(dataset_root, "train", info=info)
+        val_pairs = build_pair_list(dataset_root, "val", info=info)
+        test_pairs = build_pair_list(dataset_root, "test", info=info)
         print(f"   {key}: train={len(train_pairs)}, val={len(val_pairs)}, test={len(test_pairs)}")
     print()
 
@@ -55,8 +56,8 @@ def main():
     for key, info in registry.items():
         if info.get("use") != "train":
             continue
-        dataset_root = cfg.PROCESSED_DATASET_ROOT / info["path"]
-        train_pairs = build_pair_list(dataset_root, "train")
+        dataset_root = cfg.ROOT / info["path"]
+        train_pairs = build_pair_list(dataset_root, "train", info=info)
         if train_pairs:
             train_datasets.append(ProcessedDataset(train_pairs[:16], cfg.NUM_CLASSES, mode="train", max_size=None))
     if not train_datasets:
@@ -73,8 +74,8 @@ def main():
     print("5. APA test (avaliação final)")
     for key, info in registry.items():
         if info.get("use") == "test":
-            dataset_root = cfg.PROCESSED_DATASET_ROOT / info["path"]
-            test_pairs = build_pair_list(dataset_root, "test")
+            dataset_root = cfg.ROOT / info["path"]
+            test_pairs = build_pair_list(dataset_root, "test", info=info)
             print(f"   {key}: {len(test_pairs)} pares no test (avaliação final)")
             break
     else:

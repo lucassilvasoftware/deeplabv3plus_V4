@@ -114,11 +114,15 @@ class Config:
         cls.OUTPUTS_INFERENCE.mkdir(parents=True, exist_ok=True)
 
 
-# Em cluster (TCC_BASE_DIR definido): desativa dashboard e ajusta batches para H100/GH200
+# Em cluster (TCC_BASE_DIR definido): treino completo, dashboard desligado, hiperparâmetros para H100/GH200
 if os.environ.get("TCC_BASE_DIR"):
+    Config.TEST_MODE = False         # treino real (120 épocas, resnet101, early stop 12)
     Config.ENABLE_DASHBOARD = False
-    Config.BATCH_SIZE = 24          # H100 80GB / GH200: 512x512 cabe bem; reduzir se OOM
-    Config.NUM_WORKERS = 6          # Lustre aproveita I/O paralelo
+    Config.BATCH_SIZE = 24           # H100 80GB: 512x512 cabe bem; reduzir para 12–16 se OOM
+    Config.NUM_WORKERS = 8           # Lustre: I/O paralelo (6–8 típico para um GPU)
+    Config.LEARNING_RATE = 2e-4      # escala com batch maior (regra sqrt: 1e-4 * sqrt(24/4) ≈ 2.45e-4)
+    Config.EPOCHS = 120
+    Config.EARLY_STOP_PATIENCE = 12
     # Config.APA_MAX_SIZE = (1024, 1024)  # opcional: mais resolução; usar BATCH_SIZE 8–12
 
 # Overrides quando TEST_MODE=True (avalia na importação)

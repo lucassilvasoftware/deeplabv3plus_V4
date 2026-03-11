@@ -8,7 +8,7 @@ Classe: ProcessedDataset.
 import csv
 import random
 from pathlib import Path
-from typing import List, Tuple, Dict, Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import torch
@@ -36,6 +36,11 @@ def load_registry(processed_root: Path) -> Dict[str, Any]:
 def _use_processed_subdir(dataset_root: Path) -> bool:
     """True se o dataset usa pasta processed/ (pairs.csv em processed/)."""
     return (dataset_root / "processed" / "pairs.csv").exists()
+
+
+def _image_extensions():
+    """Extensões aceitas para imagens (inclui GeoTIFF)."""
+    return {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 
 def ensure_splits_for_processed(dataset_root: Path, seed: int = 42, train_ratio: float = 0.7, val_ratio: float = 0.15) -> None:
@@ -81,16 +86,67 @@ def ensure_splits_for_processed(dataset_root: Path, seed: int = 42, train_ratio:
     print(f"[processed_loader] Splits criados para {dataset_root.name}: train={len(train_ids)}, val={len(val_ids)}, test={len(test_ids)}")
 
 
+def ensure_splits_for_raw(
+    dataset_root: Path,
+    info: Dict[str, Any],
+    seed: int = 42,
+    train_ratio: float = 0.7,
+    val_ratio: float = 0.15,
+) -> None:
+    """
+    Para dataset no layout images_dir/masks_dir (sem processed/): se não existir pairs.csv ou splits,
+    gera a partir da listagem (pareamento por stem). Escreve pairs.csv e splits/train.txt, val.txt, test.txt.
+    """
+    pairs_csv = dataset_root / "pairs.csv"
+    splits_dir = dataset_root / "splits"
+    if (splits_dir / "train.txt").exists() and pairs_csv.exists():
+        return
+    images_dir = dataset_root / info.get("images_dir", "images")
+    masks_dir = dataset_root / info.get("masks_dir", "masks")
+    if not images_dir.exists() or not masks_dir.exists():
+        return
+    exts_img = _image_extensions()
+    stems_to_image: Dict[str, str] = {}
+    for f in images_dir.iterdir():
+        if f.is_file() and f.suffix.lower() in exts_img:
+            stems_to_image[f.stem] = f.name
+    pairs: List[Tuple[str, str]] = []
+    for f in masks_dir.iterdir():
+        if f.is_file() and f.suffix.lower() == ".png":
+            if f.stem in stems_to_image:
+                pairs.append((stems_to_image[f.stem], f.name))
+    if not pairs:
+        return
+    splits_dir.mkdir(parents=True, exist_ok=True)
+    with open(pairs_csv, "w", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["image", "mask"])
+        for a, b in sorted(pairs):
+            w.writerow([a, b])
+    ids = [Path(img).stem for img, _ in sorted(pairs)]
+    rng = random.Random(seed)
+    rng.shuffle(ids)
+    n_train = int(len(ids) * train_ratio)
+    n_val = int(len(ids) * val_ratio)
+    n_test = len(ids) - n_train - n_val
+    train_ids, val_ids, test_ids = ids[:n_train], ids[n_train : n_train + n_val], ids[n_train + n_val :]
+    for name, id_list in [("train", train_ids), ("val", val_ids), ("test", test_ids)]:
+        with open(splits_dir / f"{name}.txt", "w", encoding="utf-8") as f:
+            for i in id_list:
+                f.write(i + "\n")
+    print(f"[processed_loader] Splits (raw) criados para {dataset_root.name}: train={len(train_ids)}, val={len(val_ids)}, test={len(test_ids)}")
+
+
 def build_pair_list(
     dataset_root: Path,
     split: str,
     use_processed: Optional[bool] = None,
+    info: Optional[Dict[str, Any]] = None,
 ) -> List[Tuple[Path, Path]]:
     """
     Constrói lista de (path_imagem, path_máscara) para o split dado (train/val/test).
-    use_processed: True = pairs em processed/ e IDs no split; False = pairs na raiz, IDs = base name.
-    Se use_processed for None, é inferido por _use_processed_subdir.
-    Para datasets com processed/ sem splits (ex. dataset 3), chame ensure_splits_for_processed antes.
+    use_processed: True = pairs em processed/ e IDs no split; False = pairs na raiz (pairs.csv + images_dir/masks_dir).
+    info: opcional; usado no layout raw para images_dir/masks_dir (default "images", "masks").
     """
     if use_processed is None:
         use_processed = _use_processed_subdir(dataset_root)
@@ -105,18 +161,22 @@ def build_pair_list(
     if use_processed:
         proc = dataset_root / "processed"
         for bid in ids:
-            img_path = proc / f"{bid}.jpg"
             mask_path = proc / f"{bid}_m.png"
-            if not img_path.exists():
-                img_path = proc / f"{bid}.png"
             if not mask_path.exists():
                 continue
+            img_path = proc / f"{bid}.jpg"
+            if not img_path.exists():
+                img_path = proc / f"{bid}.png"
+            if not img_path.exists():
+                img_path = proc / f"{bid}.tif"
+            if not img_path.exists():
+                img_path = proc / f"{bid}.tiff"
             if not img_path.exists():
                 continue
             pairs.append((img_path, mask_path))
     else:
-        images_dir = dataset_root / "images"
-        masks_dir = dataset_root / "masks"
+        images_dir = dataset_root / (info.get("images_dir", "images") if info else "images")
+        masks_dir = dataset_root / (info.get("masks_dir", "masks") if info else "masks")
         pairs_csv = dataset_root / "pairs.csv"
         id_set = set(ids)
         if not pairs_csv.exists():
@@ -138,10 +198,21 @@ def build_pair_list(
     return pairs
 
 
+def _rgb_mask_to_index(mask_rgb: np.ndarray, class_colors: Dict[int, Tuple[int, ...]]) -> np.ndarray:
+    """Converte máscara RGB (H,W,3) para mapa de índices (H,W) usando class_colors (R,G,B)."""
+    h, w = mask_rgb.shape[:2]
+    out = np.zeros((h, w), dtype=np.uint8)
+    for cid, color in class_colors.items():
+        # color é (R, G, B); mask_rgb em RGB
+        out[np.all(mask_rgb == np.array(color, dtype=mask_rgb.dtype), axis=2)] = cid
+    return out
+
+
 class ProcessedDataset(Dataset):
     """
     Dataset PyTorch que lê pares (imagem, máscara) de processed_dataset.
-    Máscaras já em índices 0..num_classes-1 (PNG modo L). Retorna (image_tensor, mask_long).
+    Máscaras: grayscale (pixel = índice 0..num_classes-1) ou RGB (8 cores conforme CLASS_COLORS);
+    RGB é convertido para índice em carga. Retorna (image_tensor, mask_long).
     Augmentations apenas para mode='train'.
     """
 
@@ -151,11 +222,20 @@ class ProcessedDataset(Dataset):
         num_classes: int,
         mode: str = "train",
         max_size: Optional[Tuple[int, int]] = None,
+        class_colors: Optional[Dict[int, Tuple[int, ...]]] = None,
     ):
         self.pairs = pairs
         self.num_classes = num_classes
         self.mode = mode
         self.max_size = max_size  # (H, W) opcional para redimensionar imagens grandes (ex. APA)
+        if class_colors is None:
+            try:
+                from config import Config
+                self.class_colors = Config.CLASS_COLORS
+            except Exception:
+                self.class_colors = {}
+        else:
+            self.class_colors = class_colors
         if mode == "train":
             self.transform = A.Compose(
                 [
@@ -192,7 +272,13 @@ class ProcessedDataset(Dataset):
             raise RuntimeError(f"Imagem não carregada: {img_path}")
         mask = cv2.imread(str(mask_path), cv2.IMREAD_GRAYSCALE)
         if mask is None:
-            raise RuntimeError(f"Máscara não carregada: {mask_path}")
+            # Tentar como RGB (máscaras com 8 cores)
+            mask_bgr = cv2.imread(str(mask_path))
+            if mask_bgr is not None and mask_bgr.ndim == 3 and mask_bgr.shape[2] == 3:
+                mask_rgb = cv2.cvtColor(mask_bgr, cv2.COLOR_BGR2RGB)
+                mask = _rgb_mask_to_index(mask_rgb, self.class_colors)
+            else:
+                raise RuntimeError(f"Máscara não carregada: {mask_path}")
         if img.shape[:2] != mask.shape[:2]:
             raise RuntimeError(f"Shape imagem {img.shape[:2]} != máscara {mask.shape[:2]} em {img_path}")
         if self.max_size:

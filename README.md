@@ -1,17 +1,27 @@
 # LULC-SegNet — Segmentação de Uso e Cobertura do Solo (Petrópolis)
 
-Segmentação semântica com **SegNet + CBAM** para classificação de uso e cobertura do solo em imagens de satélite. **8 classes:**
+Segmentação semântica com **DeepLabV3+** (e fluxo legado SegNet + CBAM) para classificação de uso e cobertura do solo em imagens de satélite. **8 classes.**
 
-| Classe | Nome | RGB | Descrição |
-|--------|------|-----|-----------|
-| 0 | Mata Nativa | (0, 100, 0) | Floresta preservada |
-| 1 | Vegetação Densa | (0, 255, 0) | Cobertura vegetal densa |
-| 2 | Ocupação Urbana | (128, 128, 128) | Edificações e infraestrutura |
-| 3 | Solo Exposto | (160, 82, 45) | Terreno sem cobertura |
-| 4 | Corpos d'Água | (0, 0, 255) | Rios, lagos, reservatórios |
-| 5 | Agricultura | (255, 255, 0) | Cultivo e pastagem |
-| 6 | Regeneração | (173, 255, 47) | Vegetação em recuperação |
-| 7 | Sombra | (0, 0, 0) | Áreas sombreadas |
+---
+
+## Classes das máscaras
+
+As máscaras de segmentação (labels) usam **8 classes** com índices de 0 a 7. Cada pixel deve ter **ou** o valor de índice em grayscale (0..7) **ou** a cor RGB exata abaixo. A definição está em `src/config.py` (`CLASS_NAMES` e `CLASS_COLORS`).
+
+| Índice | Nome        | RGB (R, G, B)   | Uso nas máscaras |
+|--------|-------------|-----------------|------------------|
+| 0      | Urbano      | (128, 128, 128) | Área urbana, edificações |
+| 1      | Veg. Densa  | (0, 255, 0)    | Vegetação densa |
+| 2      | Sombra      | (0, 0, 0)      | Áreas sombreadas |
+| 3      | Veg. Esparsa| (173, 255, 47) | Vegetação esparsa |
+| 4      | Agricultura | (255, 255, 0)  | Cultivo, pastagem |
+| 5      | Rocha       | (160, 82, 45)  | Rocha |
+| 6      | Solo Exposto| (160, 82, 45)  | Solo exposto |
+| 7      | Água        | (0, 0, 255)    | Corpos d'água |
+
+**Nota:** As classes 5 (Rocha) e 6 (Solo Exposto) compartilham o mesmo RGB no projeto atual; a distinção é pelo índice. Em máscaras RGB, ambos aparecem com a mesma cor.
+
+Para alterar classes ou cores, edite `CLASS_NAMES` e `CLASS_COLORS` em `src/config.py` e gere/atualize as máscaras de acordo.
 
 ---
 
@@ -71,7 +81,38 @@ data/
     └── fold2_labels.txt   # Validação
 ```
 
-Máscaras: mesmo tamanho das imagens; cores RGB exatas conforme `CLASS_COLORS`. Um nome de arquivo por linha nos `.txt` de folds.
+Máscaras: mesmo tamanho das imagens. Podem ser **grayscale** (valor do pixel = índice 0..7) ou **RGB** com as cores exatas da tabela [Classes das máscaras](#classes-das-máscaras) (`CLASS_COLORS` em `src/config.py`). Um nome de arquivo por linha nos `.txt` de folds.
+
+**Fluxo com `processed_dataset` (recomendado):** O treino lê o registry em `processed_dataset/dataset_registry.yaml`. O `path` de cada dataset é relativo à **raiz do projeto (ROOT)**; assim você pode apontar para pastas de dados brutos (ex.: `datasets_brutos/0_lulc_dataset_icmbio_30cm`) sem copiar arquivos. Use `images_dir` e `masks_dir` no YAML quando os nomes das pastas forem diferentes (ex.: `images-tiff`, `labels`). Para gerar o registry, `pairs.csv` e os splits a partir das pastas de imagens/máscaras (sem processar imagens), rode:
+```bash
+cd src/
+python generate_dataset_registry.py --datasets-root ../datasets_brutos
+```
+Isso escreve `processed_dataset/dataset_registry.yaml` e, em cada dataset, `pairs.csv` e `splits/train.txt`, `val.txt`, `test.txt`. No cluster (Santos Dumont), defina `TCC_BASE_DIR` com a raiz do projeto; o treino usará `TEST_MODE=False` e hiperparâmetros otimizados (batch 24, LR 2e-4, 8 workers). Para acompanhar o progresso no log: `grep PROGRESS outputs/training/*.log`.
+
+---
+
+## TCC e integração Santos Dumont
+
+**Escolhas metodológicas (para o texto do TCC):**
+
+- **Remoção do K-fold:** O treino usa **splits fixos** (train/val/test) gerados uma vez a partir do registry (proporções 70/15/15%). Isso garante reprodutibilidade e está alinhado a muitos trabalhos de segmentação semântica que reportam métricas em um único split. O código legado com folds permanece em `dataset.py`, `utils.load_fold_files` e `count_dataset.py` apenas para referência.
+- **Dataset mesclado:** Dois conjuntos (bizotto 3,7 cm e LULC 30 cm) com as mesmas 8 classes são unidos via `dataset_registry.yaml`; o loader lê `path` relativo à raiz do projeto e aceita `images_dir`/`masks_dir` distintos por fonte. Máscaras podem ser RGB (8 cores) ou grayscale (índice 0..7); a conversão RGB→índice é feita em carga.
+
+**Treino no Santos Dumont (Slurm):**
+
+1. **Preparar o projeto no cluster:** Copie o repositório e os dados para o cluster (ex.: `$HOME/tcc-v2-DeeplabV3Plus` ou `$SCRATCH/...`). Os dados devem estar em `ROOT/datasets_brutos/` (ou no caminho indicado em `path` no registry).
+2. **Registry e splits:** Rode uma vez no cluster (ou antes, localmente) o script de geração:  
+   `python src/generate_dataset_registry.py --datasets-root ../datasets_brutos`  
+   assim `processed_dataset/dataset_registry.yaml` e os `pairs.csv`/splits existem.
+3. **Submeter o job:** Nos nós de login do SDumont2nd, defina `TCC_BASE_DIR` (se necessário) e submeta:  
+   `sbatch scripts/slurm_train_sdumont2nd.slurm`  
+   O script usa partição `lncc-h100_shared`, 1 GPU, 24 h; saída em `slurm_%j.out` e log do treino em `outputs/training/training_*.log`.
+4. **Monitorar:** `grep PROGRESS outputs/training/training_*.log` ou `tail -f slurm_*.out`. O job id fica em `outputs/training/slurm_job_id.txt` (útil para `scancel`).
+
+**Hiperparâmetros no cluster (quando `TCC_BASE_DIR` está definido):** `TEST_MODE=False`, `BATCH_SIZE=24`, `LEARNING_RATE=2e-4` (escala com batch maior), `NUM_WORKERS=8`, `EARLY_STOP_PATIENCE=12`, mixed precision (AMP) ativo. Em `src/config.py` é possível descomentar `APA_MAX_SIZE=(1024,1024)` e reduzir o batch (ex.: 8–12) para treinar em resolução maior, se a VRAM permitir.
+
+**Checklist para o treino funcionar:** (a) `processed_dataset/dataset_registry.yaml` existe; (b) cada `path` do registry aponta para uma pasta que existe em `ROOT`; (c) nessas pastas há `pairs.csv` e `splits/` (ou o script de geração foi executado); (d) ambiente Python no cluster com as dependências instaladas; (e) `TCC_BASE_DIR` definido ao rodar (o script Slurm já exporta).
 
 ---
 
@@ -83,7 +124,7 @@ cd src/
 python main.py
 ```
 
-Config em `main.py`: `BATCH_SIZE`, `EPOCHS`, `LEARNING_RATE`, `IMG_SIZE`, `NUM_CLASSES`, `DEVICE`.
+Config em `src/config.py`: `BATCH_SIZE`, `EPOCHS`, `LEARNING_RATE`, `NUM_CLASSES`, `APA_MAX_SIZE`, etc.
 
 **Inferência:**
 ```bash
@@ -121,7 +162,7 @@ Durante o treino: loss (treino/validação), mIoU por época, IoU por classe. Me
 
 ## Customização
 
-- **Novas classes:** alterar `CLASS_COLORS` e `NUM_CLASSES` em `main.py`; máscaras com as novas cores; retreinar.
+- **Novas classes:** alterar `CLASS_COLORS` e `NUM_CLASSES` em `src/config.py`; máscaras com as novas cores; retreinar.
 - **Augmentações:** `get_transforms()` em `dataset.py`.
 - **Hiperparâmetros:** `main.py` (`BATCH_SIZE`, `EPOCHS`, `LEARNING_RATE`, `IMG_SIZE`, `PATIENCE`).
 
@@ -138,7 +179,7 @@ Durante o treino: loss (treino/validação), mIoU por época, IoU por classe. Me
 ## Problemas Comuns
 
 - **CUDA OOM:** reduzir `BATCH_SIZE` em `main.py`.
-- **Máscaras erradas:** conferir RGB idêntico a `CLASS_COLORS`.
+- **Máscaras erradas:** conferir RGB idêntico à tabela [Classes das máscaras](#classes-das-máscaras) (`CLASS_COLORS` em `src/config.py`).
 - **Baixo mIoU:** checar anotações; aumentar augmentação; ajustar LR ou usar pesos pré-treinados.
 - **Não converge:** validar máscaras; diminuir LR; mais épocas; balanceamento de classes.
 
