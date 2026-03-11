@@ -1,15 +1,10 @@
 """
-Treino e avaliação: um único fluxo (sem K-fold). Constrói DataLoaders a partir do registry
-(processed_dataset); loop de épocas (train/val); cálculo de mIoU, F1 e matriz de confusão;
-early stopping e salvamento do melhor modelo; avaliação final no test set da APA.
-Dashboard HTML em tempo real quando DASHBOARD_PORT está definido.
-Logs via logging (arquivo com data/hora + console).
-Funções principais: get_model, train_model, run_final_evaluation_apa.
+Treino e avaliação: fluxo enxuto (sem K-fold). DataLoaders do registry (processed_dataset);
+loop train/val; mIoU, F1, Precision, Recall; early stopping; melhor modelo salvo;
+avaliação final no test set da APA. Logs via logging.
 """
-import json
 import logging
 import time
-from datetime import datetime, timedelta
 import torch
 from pathlib import Path
 from collections import deque
@@ -183,239 +178,8 @@ def _format_duration(seconds):
     return f"{m}:{s:02d}"
 
 
-def _json_safe(obj):
-    """Converte dict/lista para JSON-safe (nan -> null)."""
-    if isinstance(obj, dict):
-        return {k: _json_safe(v) for k, v in obj.items()}
-    if isinstance(obj, (list, tuple)):
-        return [_json_safe(x) for x in obj]
-    if isinstance(obj, (float, np.floating)) and np.isnan(obj):
-        return None
-    if isinstance(obj, (np.integer, np.int64)):
-        return int(obj)
-    return obj
-
-
-def _write_training_status(outputs_dir, state):
-    """Escreve training_status.json para o dashboard em tempo real."""
-    path = Path(outputs_dir) / "training_status.json"
-    safe = _json_safe(state)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(safe, f, indent=2, ensure_ascii=False)
-
-
-def _start_dashboard_server(outputs_dir, port):
-    """Inicia servidor HTTP em thread daemon para servir outputs/ (dashboard HTML + JSON)."""
-    import http.server
-    import socketserver
-
-    class Handler(http.server.SimpleHTTPRequestHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=str(outputs_dir), **kwargs)
-
-        def log_message(self, format, *args):
-            pass  # silencia logs do servidor
-
-        def do_GET(self):
-            try:
-                super().do_GET()
-            except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
-                pass  # cliente fechou/atualizou a página durante o envio
-
-    try:
-        with socketserver.TCPServer(("", port), Handler) as httpd:
-            httpd.serve_forever()
-    except OSError:
-        pass  # porta em uso ou permissão
-
-
-def _ensure_dashboard_html(outputs_dir):
-    """Escreve training_dashboard.html em outputs_dir (sobrescreve para atualizar template)."""
-    path = Path(outputs_dir) / "training_dashboard.html"
-    html = _DASHBOARD_HTML
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(html)
-
-
-# Template do dashboard HTML (atualização em tempo real via fetch do JSON)
-_DASHBOARD_HTML = r"""<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Treino — DeepLabV3+</title>
-  <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-      margin: 0;
-      padding: 2rem;
-      background: #f8f9fa;
-      color: #1a1a1a;
-      font-size: 15px;
-      line-height: 1.5;
-      max-width: 720px;
-      margin-left: auto;
-      margin-right: auto;
-    }
-    h1 {
-      font-weight: 600;
-      font-size: 1.25rem;
-      letter-spacing: -0.02em;
-      color: #1a1a1a;
-      margin: 0 0 1.5rem 0;
-    }
-    .card {
-      background: #fff;
-      border-radius: 10px;
-      padding: 1.25rem 1.5rem;
-      margin-bottom: 1rem;
-      border: 1px solid #e8e8e8;
-    }
-    .card h2 {
-      margin: 0 0 1rem 0;
-      font-size: 0.75rem;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-      color: #6b7280;
-    }
-    .row { display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; }
-    .metric {
-      background: #f4f4f5;
-      padding: 0.5rem 0.875rem;
-      border-radius: 6px;
-      min-width: 6rem;
-    }
-    .metric span {
-      display: block;
-      font-size: 0.7rem;
-      color: #71717a;
-      text-transform: uppercase;
-      letter-spacing: 0.03em;
-      margin-bottom: 0.15rem;
-    }
-    .metric strong { font-size: 1rem; font-weight: 600; color: #18181b; }
-    .metric-block { margin-top: 0.5rem; min-width: auto; }
-    .progress-wrap {
-      background: #e4e4e7;
-      border-radius: 6px;
-      height: 6px;
-      overflow: hidden;
-      margin: 0.75rem 0;
-    }
-    .progress-bar {
-      background: #18181b;
-      height: 100%;
-      transition: width 0.25s ease;
-    }
-    .label-row { margin: 0.5rem 0 0.25rem 0; font-size: 0.8rem; color: #71717a; }
-    .label-row strong { color: #18181b; }
-    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
-    th, td { text-align: left; padding: 0.5rem 0.75rem; border-bottom: 1px solid #f4f4f5; }
-    th { font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: #71717a; }
-    td { color: #3f3f46; }
-    tr:last-child td { border-bottom: 0; }
-    .phase {
-      display: inline-block;
-      padding: 0.35rem 0.75rem;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      font-weight: 500;
-    }
-    .phase.training { background: #eff6ff; color: #1d4ed8; }
-    .phase.validating { background: #fffbeb; color: #b45309; }
-    .phase.finished { background: #f0fdf4; color: #15803d; }
-    .updated { color: #a1a1aa; font-size: 0.75rem; margin-top: 1rem; }
-  </style>
-</head>
-<body>
-  <h1>DeepLabV3+ · Treino</h1>
-  <div class="card">
-    <h2>Status</h2>
-    <div class="row" style="margin-bottom: 0.5rem;">
-      <span class="metric" style="min-width: auto;"><span>Modo</span><strong id="run-mode">--</strong></span>
-      <span id="mode-hint" class="label-row" style="margin: 0; font-size: 0.75rem;"></span>
-    </div>
-    <div id="phase" class="phase">--</div>
-    <div class="updated" id="updated">Aguardando dados...</div>
-  </div>
-    <div class="card">
-    <h2>Tempo e progresso</h2>
-    <div class="row">
-      <div class="metric"><span>Decorrido</span><strong id="elapsed">--:--</strong></div>
-      <div class="metric"><span>ETA época</span><strong id="eta-epoch">--:--</strong></div>
-      <div class="metric"><span>ETA total</span><strong id="eta-total">--:--</strong></div>
-      <div class="metric"><span>Épocas rest.</span><strong id="epochs-left">--</strong></div>
-    </div>
-    <div class="metric metric-block"><span>Previsão de término</span><strong id="eta-finish">--</strong></div>
-    <div class="label-row">Época <strong id="epoch-progress">-- / --</strong></div>
-    <div class="progress-wrap"><div class="progress-bar" id="progress-epoch" style="width:0%"></div></div>
-    <div class="label-row">Batch <strong id="batch-progress">-- / --</strong></div>
-  </div>
-  <div class="card">
-    <h2>Métricas</h2>
-    <div class="row">
-      <div class="metric"><span>Train loss</span><strong id="train-loss">--</strong></div>
-      <div class="metric"><span>Val loss</span><strong id="val-loss">--</strong></div>
-      <div class="metric"><span>mIoU</span><strong id="miou">--%</strong></div>
-      <div class="metric"><span>F1 macro</span><strong id="f1">--%</strong></div>
-      <div class="metric"><span>Melhor mIoU</span><strong id="best-miou">--%</strong></div>
-    </div>
-    <div class="metric metric-block"><span>Expectativa precisão final (mIoU)</span><strong id="expected-final-miou">--</strong></div>
-  </div>
-  <div class="card">
-    <h2>IoU / F1 por classe</h2>
-    <table><thead><tr><th>Classe</th><th>IoU</th><th>F1</th></tr></thead><tbody id="per-class"></tbody></table>
-  </div>
-  <script>
-    const fmt = (v) => v == null || (typeof v === 'number' && isNaN(v)) ? '--' : v;
-    const pct = (v) => v == null || isNaN(v) ? '--' : (v * 100).toFixed(2) + '%';
-    function refresh() {
-      fetch('training_status.json?t=' + Date.now()).then(r => r.json()).then(d => {
-        const testMode = !!d.test_mode;
-        document.getElementById('run-mode').textContent = testMode ? 'Teste' : 'Real';
-        document.getElementById('run-mode').parentElement.style.background = testMode ? '#fef3c7' : '#d1fae5';
-        document.getElementById('mode-hint').textContent = testMode
-          ? 'Pesos em models/deeplabv3plus_test_weights.pth (não usar para inference final).'
-          : 'Pesos em models/deeplabv3plus_best_weights.pth (uso em inference).';
-        document.getElementById('phase').textContent = d.phase || '--';
-        document.getElementById('phase').className = 'phase ' + (d.phase || '').toLowerCase();
-        document.getElementById('elapsed').textContent = d.elapsed_str || '--:--';
-        document.getElementById('eta-epoch').textContent = d.eta_epoch_str || '--:--';
-        document.getElementById('eta-total').textContent = d.eta_total_str || '--:--';
-        document.getElementById('epochs-left').textContent = fmt(d.epochs_remaining);
-        document.getElementById('epoch-progress').textContent = (d.current_epoch ?? '--') + ' / ' + (d.total_epochs ?? '--');
-        document.getElementById('progress-epoch').style.width = (d.progress_epoch_pct ?? 0) + '%';
-        document.getElementById('batch-progress').textContent = (d.batch_in_epoch ?? '--') + ' / ' + (d.total_batches_epoch ?? '--');
-        document.getElementById('eta-finish').textContent = d.eta_finish_at || '--';
-        document.getElementById('train-loss').textContent = typeof d.train_loss_epoch === 'number' ? d.train_loss_epoch.toFixed(4) : '--';
-        document.getElementById('val-loss').textContent = typeof d.last_val_loss === 'number' ? d.last_val_loss.toFixed(4) : '--';
-        document.getElementById('miou').textContent = pct(d.last_val_miou);
-        document.getElementById('f1').textContent = pct(d.last_f1_macro);
-        document.getElementById('best-miou').textContent = pct(d.best_val_miou);
-        document.getElementById('expected-final-miou').textContent = pct(d.expected_final_miou);
-        const tbody = document.getElementById('per-class');
-        const names = d.class_names || [];
-        const ious = d.ious || [];
-        const f1s = d.f1_per_class || [];
-        tbody.innerHTML = names.map((n, i) => '<tr><td>' + n + '</td><td>' + pct(ious[i]) + '</td><td>' + pct(f1s[i]) + '</td></tr>').join('') || '<tr><td colspan="3">--</td></tr>';
-        document.getElementById('updated').textContent = 'Atualizado: ' + new Date().toLocaleTimeString('pt-BR');
-      }).catch(() => {});
-    }
-    refresh();
-    setInterval(refresh, 1500);
-  </script>
-</body>
-</html>
-"""
-
-
 def train_model(config):
     config.ensure_dirs()
-    MODELS_DIR = config.MODELS_DIR
-    OUTPUTS_TRAINING = config.OUTPUTS_TRAINING
-    OUTPUTS_EVAL = config.OUTPUTS_EVAL
     _set_seed(config.SEED)
     logging.info("Log de treinamento (splits fixos, sem K-fold)")
     _log_config(config)
@@ -440,98 +204,20 @@ def train_model(config):
     logging.info("=" * 60)
     logging.info("")
 
-    # Dashboard em tempo real (servidor + HTML); desativar com ENABLE_DASHBOARD=False (ex: Santos Dumont)
-    dashboard_port = getattr(config, "DASHBOARD_PORT", None) if getattr(config, "ENABLE_DASHBOARD", False) else None
-    if dashboard_port:
-        _ensure_dashboard_html(OUTPUTS_TRAINING)
-        import threading
-        server_thread = threading.Thread(
-            target=_start_dashboard_server,
-            args=(OUTPUTS_TRAINING, dashboard_port),
-            daemon=True,
-        )
-        server_thread.start()
-        logging.info("  Dashboard (tempo real): http://localhost:%s/training_dashboard.html", dashboard_port)
-        logging.info("")
-
     t_start = time.time()
-    epoch_times = []  # duração de cada época concluída (train+val)
+    epoch_times = []
     batch_times = deque(maxlen=50)
     val_times = deque(maxlen=10)
-
-    def _state(phase, epoch, total_epochs, batch_in_epoch, total_batches_epoch, train_loss_epoch,
-               best_miou, last_miou, last_val_loss, last_f1, class_names, ious, f1_per_class, miou_history):
-        elapsed = time.time() - t_start
-        sec_per_batch = np.mean(batch_times) if batch_times else None
-        remaining_batches = total_batches_epoch - batch_in_epoch if batch_in_epoch is not None else 0
-        eta_epoch = (remaining_batches * sec_per_batch) if sec_per_batch and remaining_batches > 0 else None
-        avg_epoch_time = np.mean(epoch_times) if epoch_times else None
-        avg_val_time = np.mean(val_times) if val_times else None
-        epochs_rem = (total_epochs - epoch) if (epoch is not None and total_epochs is not None) else None
-        if eta_epoch is not None and epochs_rem is not None and avg_epoch_time is not None:
-            eta_total = eta_epoch + (epochs_rem - 1) * avg_epoch_time + (epochs_rem * (avg_val_time or 0))
-        elif eta_epoch is not None and epochs_rem is not None:
-            eta_total = eta_epoch * max(epochs_rem, 1)
-        else:
-            eta_total = None
-        progress_pct = (100.0 * batch_in_epoch / total_batches_epoch) if (batch_in_epoch is not None and total_batches_epoch) else 0
-        # Previsão de horário de conclusão
-        eta_finish_at = None
-        if eta_total is not None and eta_total > 0:
-            finish = datetime.now() + timedelta(seconds=eta_total)
-            today = datetime.now().date()
-            if finish.date() == today:
-                eta_finish_at = "Hoje " + finish.strftime("%H:%M")
-            elif finish.date() == today + timedelta(days=1):
-                eta_finish_at = "Amanhã " + finish.strftime("%H:%M")
-            else:
-                eta_finish_at = finish.strftime("%d/%m %H:%M")
-        # Expectativa de precisão final (regressão linear sobre mIoU por época)
-        expected_final_miou = None
-        if miou_history and total_epochs and len(miou_history) >= 2:
-            x = np.array([e for e, _ in miou_history], dtype=float)
-            y = np.array([m for _, m in miou_history], dtype=float)
-            n = len(x)
-            sx, sy = x.sum(), y.sum()
-            sxx = (x * x).sum()
-            sxy = (x * y).sum()
-            denom = n * sxx - sx * sx
-            b = (n * sxy - sx * sy) / denom if denom != 0 else 0
-            a = (sy - b * sx) / n
-            pred = a + b * total_epochs
-            expected_final_miou = float(np.clip(pred, 0, 1))
-        out = {
-            "test_mode": getattr(config, "TEST_MODE", False),
-            "phase": phase,
-            "current_epoch": epoch,
-            "total_epochs": total_epochs,
-            "epochs_remaining": epochs_rem,
-            "batch_in_epoch": batch_in_epoch,
-            "total_batches_epoch": total_batches_epoch,
-            "progress_epoch_pct": round(progress_pct, 1),
-            "train_loss_epoch": float(train_loss_epoch) if train_loss_epoch is not None else None,
-            "elapsed_seconds": elapsed,
-            "elapsed_str": _format_duration(elapsed),
-            "eta_epoch_str": _format_duration(eta_epoch),
-            "eta_total_str": _format_duration(eta_total),
-            "eta_total_seconds": eta_total,
-            "eta_finish_at": eta_finish_at,
-            "expected_final_miou": expected_final_miou,
-            "best_val_miou": float(best_miou) if best_miou is not None else None,
-            "last_val_miou": float(last_miou) if last_miou is not None else None,
-            "last_val_loss": float(last_val_loss) if last_val_loss is not None else None,
-            "last_f1_macro": float(last_f1) if last_f1 is not None else None,
-            "class_names": list(class_names) if class_names else [],
-            "ious": [float(x) if not np.isnan(x) else None for x in (ious or [])],
-            "f1_per_class": [float(x) if not np.isnan(x) else None for x in (f1_per_class or [])],
-        }
-        return out
 
     last_val_loss = None
     last_miou = None
     last_f1 = None
+    last_precision_macro = None
+    last_recall_macro = None
     last_ious = []
     last_f1_per_class = []
+    last_precision_per_class = []
+    last_recall_per_class = []
     miou_history = []  # (epoch, miou) para extrapolação da expectativa final
     model = get_model(config).to(config.DEVICE)
     criterion = ComboLoss(
@@ -599,11 +285,6 @@ def train_model(config):
                 "ETA": _format_duration(eta_total_sec),
                 "rest": epochs_rem,
             })
-            if dashboard_port:
-                st = _state("training", epoch, config.EPOCHS, batch_idx + 1, steps, avg_loss,
-                            best_val_miou, last_miou, last_val_loss, last_f1,
-                            config.CLASS_NAMES, last_ious, last_f1_per_class, miou_history)
-                _write_training_status(OUTPUTS_TRAINING, st)
 
         train_loss /= steps
 
@@ -656,17 +337,18 @@ def train_model(config):
             last_val_loss = val_loss
             last_miou = miou
             last_f1 = f1_macro
+            last_precision_macro = metrics.get("precision_macro")
+            last_recall_macro = metrics.get("recall_macro")
             last_ious = metrics["ious"]
             last_f1_per_class = metrics["f1_per_class"]
+            last_precision_per_class = metrics.get("precision_per_class", [])
+            last_recall_per_class = metrics.get("recall_per_class", [])
             miou_history.append((epoch, miou))
-            if dashboard_port:
-                st = _state("training", epoch, config.EPOCHS, steps, steps, train_loss,
-                            best_val_miou, last_miou, last_val_loss, last_f1,
-                            config.CLASS_NAMES, last_ious, last_f1_per_class, miou_history)
-                _write_training_status(OUTPUTS_TRAINING, st)
 
             logging.info("  Val    loss: %.4f", val_loss)
-            logging.info("  mIoU:  %.2f%%   |   F1 macro: %.2f%%", miou * 100, f1_macro * 100)
+            logging.info("  mIoU: %.2f%%  |  F1 macro: %.2f%%  |  Precision: %.2f%%  |  Recall: %.2f%%",
+                        miou * 100, f1_macro * 100,
+                        (last_precision_macro or 0) * 100, (last_recall_macro or 0) * 100)
             logging.info("")
             for line in format_metrics_table(metrics, config.CLASS_NAMES).splitlines():
                 logging.info("%s", line)
@@ -694,33 +376,30 @@ def train_model(config):
         epoch_times.append(time.time() - t_epoch_start)
 
         if val_loader is not None:
-            logging.info("Época %s: train_loss=%.4f val_loss=%.4f miou=%.4f f1_macro=%.4f",
-                         epoch, train_loss, val_loss, miou * 100, f1_macro * 100)
+            logging.info("Época %s: train_loss=%.4f val_loss=%.4f miou=%.2f%% f1=%.2f%% prec=%.2f%% rec=%.2f%%",
+                         epoch, train_loss, val_loss, miou * 100, f1_macro * 100,
+                         (last_precision_macro or 0) * 100, (last_recall_macro or 0) * 100)
         else:
             logging.info("Época %s: train_loss=%.4f", epoch, train_loss)
         # Uma linha por época para grep no cluster (ex.: grep PROGRESS outputs/training/*.log)
         pct_epoch = 100.0 * epoch / config.EPOCHS
         _vloss = last_val_loss if last_val_loss is not None else 0.0
         _miou = (last_miou * 100) if last_miou is not None else 0.0
+        _prec = (last_precision_macro or 0) * 100
+        _rec = (last_recall_macro or 0) * 100
         logging.info(
-            "PROGRESS epoch=%d/%d pct=%.1f%% train_loss=%.4f val_loss=%.4f miou=%.2f%% best_miou=%.2f%%",
-            epoch, config.EPOCHS, pct_epoch, train_loss, _vloss, _miou, best_val_miou * 100,
+            "PROGRESS epoch=%d/%d pct=%.1f%% train_loss=%.4f val_loss=%.4f miou=%.2f%% f1=%.2f%% prec=%.2f%% rec=%.2f%% best_miou=%.2f%%",
+            epoch, config.EPOCHS, pct_epoch, train_loss, _vloss, _miou, (last_f1 or 0) * 100, _prec, _rec, best_val_miou * 100,
         )
-
-    if dashboard_port:
-        st = _state("finished", None, config.EPOCHS, None, None, None,
-                    best_val_miou, last_miou, last_val_loss, last_f1,
-                    config.CLASS_NAMES, last_ious, last_f1_per_class, miou_history)
-        st["elapsed_seconds"] = time.time() - t_start
-        st["elapsed_str"] = _format_duration(st["elapsed_seconds"])
-        _write_training_status(OUTPUTS_TRAINING, st)
 
     total_elapsed = time.time() - t_start
     logging.info("")
     logging.info("=" * 60)
     logging.info("  TREINO FINALIZADO")
     logging.info("=" * 60)
-    logging.info("  Melhor mIoU (val): %.2f%%", best_val_miou * 100)
+    logging.info("  Melhor mIoU (val): %.2f%%  |  F1 macro: %.2f%%  |  Precision: %.2f%%  |  Recall: %.2f%%",
+                 best_val_miou * 100, (last_f1 or 0) * 100,
+                 (last_precision_macro or 0) * 100, (last_recall_macro or 0) * 100)
     logging.info("  Tempo total: %s", _format_duration(total_elapsed))
     logging.info("=" * 60)
     logging.info("")
@@ -789,7 +468,9 @@ def run_final_evaluation_apa(config, model=None, weights_path=None):
     logging.info("=" * 60)
     logging.info("  AVALIAÇÃO FINAL — APA (test set)")
     logging.info("=" * 60)
-    logging.info("  mIoU: %.2f%%   |   F1 macro: %.2f%%", metrics["miou"] * 100, metrics["f1_macro"] * 100)
+    logging.info("  mIoU: %.2f%%  |  F1 macro: %.2f%%  |  Precision: %.2f%%  |  Recall: %.2f%%",
+                 metrics["miou"] * 100, metrics["f1_macro"] * 100,
+                 metrics.get("precision_macro", 0) * 100, metrics.get("recall_macro", 0) * 100)
     logging.info("")
     for line in format_metrics_table(metrics, config.CLASS_NAMES).splitlines():
         logging.info("%s", line)

@@ -62,21 +62,21 @@ def main():
     out_yaml = args.out_yaml.resolve()
     out_yaml.parent.mkdir(parents=True, exist_ok=True)
 
-    # Configuração conhecida dos dois datasets
+    # Todos os datasets precisam de splits (train/val/test); use: train = entra no treino; use: test = só avaliação final.
     configs = [
         {
             "key": "lulc_30cm",
-            "path": "datasets_brutos/0_lulc_dataset_icmbio_30cm",
             "folder": "0_lulc_dataset_icmbio_30cm",
             "images_dir": "images-tiff",
             "masks_dir": "labels",
+            "use": "train",
         },
         {
             "key": "bizotto_3cm",
-            "path": "datasets_brutos/1_bizotto_icmbio_3cm",
             "folder": "1_bizotto_icmbio_3cm",
-            "images_dir": "images",
-            "masks_dir": "label",
+            "images_dir": "images-tiff",
+            "masks_dir": "labels",
+            "use": "train",
         },
     ]
 
@@ -87,9 +87,14 @@ def main():
         masks_dir = dataset_dir / cfg["masks_dir"]
         pairs = find_pairs(images_dir, masks_dir)
         if not pairs:
-            print(f"[AVISO] Nenhum par encontrado em {dataset_dir}")
+            print(f"[AVISO] Nenhum par em {dataset_dir} (images_dir={cfg['images_dir']}, masks_dir={cfg['masks_dir']})")
             continue
-        # Escreve pairs.csv no próprio dataset (para build_pair_list usar)
+        # path relativo à raiz do projeto (funciona com qualquer --datasets-root)
+        try:
+            path_str = str(dataset_dir.relative_to(ROOT)).replace("\\", "/")
+        except ValueError:
+            path_str = str(dataset_dir)
+        # Escreve pairs.csv e splits no próprio dataset
         pairs_csv = dataset_dir / "pairs.csv"
         with open(pairs_csv, "w", encoding="utf-8", newline="") as f:
             w = csv.writer(f)
@@ -114,8 +119,8 @@ def main():
                     f.write(i + "\n")
         print(f"[OK] {cfg['key']}: {len(pairs)} pares, train={len(train_ids)} val={len(val_ids)} test={len(test_ids)}")
         registry["datasets"][cfg["key"]] = {
-            "path": cfg["path"],
-            "use": "train",
+            "path": path_str,
+            "use": cfg.get("use", "train"),
             "num_classes": 8,
             "images_dir": cfg["images_dir"],
             "masks_dir": cfg["masks_dir"],

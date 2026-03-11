@@ -10,7 +10,14 @@ docs/
 
 # ---- Dados e datasets (não versionar) ----
 data/
-processed_dataset/
+# processed_dataset: versionar só registry e docs; ignorar pastas de dados e gerados
+processed_dataset/*/
+processed_dataset/**/images-tiff/
+processed_dataset/**/labels/
+processed_dataset/**/label/
+processed_dataset/**/images/
+processed_dataset/**/pairs.csv
+processed_dataset/**/splits/
 *.pth
 *.pt
 checkpoints/

@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
         logging.info("===== Treinamento (processed_dataset, splits fixos) =====")
         train_model(config)
-        logging.info("===== Avaliação final no test set da APA =====")
+        logging.info("===== Avaliação final =====")
         run_final_evaluation_apa(config)
         logging.info("OK. Programa finalizado com sucesso.")
     except KeyboardInterrupt:

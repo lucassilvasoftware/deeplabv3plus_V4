@@ -25,7 +25,7 @@ class Config:
     MODELS_DIR = ROOT / "models"
     # outputs: subpastas para não misturar treino, avaliação e inference
     OUTPUTS_DIR = ROOT / "outputs"
-    OUTPUTS_TRAINING = ROOT / "outputs" / "training"   # log, dashboard, training_status.json
+    OUTPUTS_TRAINING = ROOT / "outputs" / "training"   # log de treino
     OUTPUTS_EVAL = ROOT / "outputs" / "eval"           # val_best_*, test_apa_*
     OUTPUTS_INFERENCE = ROOT / "outputs" / "inference" # segmented.png, etc.
     DATA_PATH = r"e:\Documents\lulc_env\tcc-fei\data"  # legado (folds)
@@ -60,6 +60,8 @@ class Config:
     CE_WEIGHT = 0.1  # peso do CrossEntropy no ComboLoss
 
     # ----- Early stopping (único controle de parada) -----
+    # Faz sentido também no supercomputador: evita overfitting e desperdício de tempo (ex.: plato em época 50, não rodar até 120).
+    # No cluster pode aumentar para 15–20 se quiser dar mais margem antes de parar.
     EARLY_STOP_PATIENCE = 12  # épocas sem melhorar mIoU na validação → para o treino
 
     # ----- Modo teste (ativar = treino rápido para validar pipeline) -----
@@ -69,10 +71,6 @@ class Config:
     TEST_MODE = True  # True = teste rápido | False = treino completo
     MAX_TRAIN_BATCHES = None  # None = todos; int = limite por época (em TEST_MODE é preenchido automaticamente)
     MAX_VAL_BATCHES = None    # None = todos; int = limite (em TEST_MODE é preenchido automaticamente)
-
-    # ----- Dashboard HTML (atualização em tempo real) -----
-    ENABLE_DASHBOARD = True  # False = desligado (ex: cluster/Santos Dumont); True = ativa se DASHBOARD_PORT definido
-    DASHBOARD_PORT = 8765  # servidor local; só usado se ENABLE_DASHBOARD=True; None = desligado
 
     # ----- Device -----
     DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -114,10 +112,9 @@ class Config:
         cls.OUTPUTS_INFERENCE.mkdir(parents=True, exist_ok=True)
 
 
-# Em cluster (TCC_BASE_DIR definido): treino completo, dashboard desligado, hiperparâmetros para H100/GH200
+# Em cluster (TCC_BASE_DIR definido): treino completo, hiperparâmetros para H100/GH200
 if os.environ.get("TCC_BASE_DIR"):
     Config.TEST_MODE = False         # treino real (120 épocas, resnet101, early stop 12)
-    Config.ENABLE_DASHBOARD = False
     Config.BATCH_SIZE = 24           # H100 80GB: 512x512 cabe bem; reduzir para 12–16 se OOM
     Config.NUM_WORKERS = 8           # Lustre: I/O paralelo (6–8 típico para um GPU)
     Config.LEARNING_RATE = 2e-4      # escala com batch maior (regra sqrt: 1e-4 * sqrt(24/4) ≈ 2.45e-4)

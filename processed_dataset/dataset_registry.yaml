@@ -1,0 +1,13 @@
+datasets:
+  lulc_30cm:
+    path: processed_dataset/0_lulc_dataset_icmbio_30cm
+    use: train
+    num_classes: 8
+    images_dir: images-tiff
+    masks_dir: labels
+  bizotto_3cm:
+    path: processed_dataset/1_bizotto_icmbio_3cm
+    use: train
+    num_classes: 8
+    images_dir: images-tiff
+    masks_dir: labels
